@@ -71,6 +71,8 @@ ntss_coeff_counts = zeros(1, num_frames);   % 0 for I-frames
 ebma_coeff_counts = zeros(1, num_frames);
 ntss_mvs          = cell(1, num_frames);
 ebma_mvs          = cell(1, num_frames);
+ntss_predicted    = cell(1, num_frames);
+ebma_predicted    = cell(1, num_frames);
 
 ntss_ref = [];  % reference frame for NTSS (updated each decoded frame)
 ebma_ref = [];  % reference frame for EBMA (separate — decoded frames differ)
@@ -97,6 +99,7 @@ for k = 1:num_frames
 
         if strcmp(search_type, 'ntss') || strcmp(search_type, 'both')
             [predicted, ntss_mvs{k}, ~, ntss_sad(k)] = ntss(ntss_ref, curr, N);
+            ntss_predicted{k} = predicted;
 
             % Quantize the residual and reconstruct
             [recon_res, ntss_coeff_counts(k)] = quantize_residual(curr - predicted, Q);
@@ -111,6 +114,7 @@ for k = 1:num_frames
 
         if strcmp(search_type, 'ebma') || strcmp(search_type, 'both')
             [predicted, ebma_mvs{k}, ~, ebma_sad(k)] = ebma(ebma_ref, curr, N);
+            ebma_predicted{k} = predicted;
 
             [recon_res, ebma_coeff_counts(k)] = quantize_residual(curr - predicted, Q);
             ebma_decoded{k} = min(max(predicted + recon_res, 0), 255);
@@ -168,6 +172,22 @@ if strcmp(search_type, 'ebma') || strcmp(search_type, 'both')
     mv = ebma_mvs{first_p};
     quiver(mv(:,1), mv(:,2), mv(:,3), mv(:,4), 0, 'y');
     title(sprintf('EBMA — frame %d motion vectors', first_p)); hold off;
+end
+
+% --- Residual figures ------------------------------------------------------
+
+if strcmp(search_type, 'ntss') || strcmp(search_type, 'both')
+    residual = all_frames{first_p} - ntss_predicted{first_p};
+    figure;
+    imshow(residual, []);
+    title(sprintf('NTSS — frame %d residual', first_p));
+end
+
+if strcmp(search_type, 'ebma') || strcmp(search_type, 'both')
+    residual = all_frames{first_p} - ebma_predicted{first_p};
+    figure;
+    imshow(residual, []);
+    title(sprintf('EBMA — frame %d residual', first_p));
 end
 
 % --- Comparison analysis (only when both algorithms ran) -------------------
