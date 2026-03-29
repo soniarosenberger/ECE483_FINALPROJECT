@@ -1,220 +1,140 @@
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% NOTES:
-% Clean up regular TSS operation
+% NTSS  New Three-Step Search block motion estimation.
+% Ref: Li, Zeng & Liou (1994), IEEE Trans. Circuits Syst. Video Technol.
+%
+% Inputs:
+%   reference_frame  double H x W  previous frame
+%   current_frame    double H x W  frame to be predicted
+%   N                block size in pixels (typically 16)
+%
+% Outputs:
+%   predicted_frame  motion-compensated reconstruction of current_frame
+%   motion_vectors   M x 4 matrix, one row per block: [x, y, dx, dy]
+%   psnr_val         PSNR between current_frame and predicted_frame (dB)
+%   sad_count        total number of SAD computations performed
+%
+% Algorithm overview:
+%   Stage 1  — check 17 candidates: center + 8 S=1 neighbors + 8 S=4 points.
+%   Decision — if best is at center:      first-step stop  (done).
+%              if best is an S=1 neighbor: half-way stop   (Stage 2).
+%              if best is an S=4 point:    full TSS        (Stage 3).
+%   Stage 2  — S=1 neighborhood around Stage-1 best (skipping already-checked points).
+%   Stage 3  — S=2 search then S=1 search, both from the Stage-1 best.
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-% Block Based Video Encoder
-% Revised 3 Step Search Implementation
-
-% Order of Operations: Per IEEE paper
-% 1. Minimum at center - first step stop // completed
-% 2. Minimum at edge of center check - halfway stop
-% 3. Minimum at corner points - regular TSS operation (following S = 4,2,1)
-
-
-function ntss
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Generic image
-close all
-
-reference_frame = double(imread("train01.tif"));
-current_frame = double(imread("train02.tif"));
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Define block size
-N = 16;
-
-% Getting height and width of current image
-% reference_frame = older image, current frame = now, predicted_frame =
-% predicted current image from reference frame blocks.
+function [predicted_frame, motion_vectors, psnr_val, sad_count] = ntss(reference_frame, current_frame, N)
 
 [height, width] = size(current_frame);
-predicted_frame = zeros(height,width);
+predicted_frame = zeros(height, width);
+motion_vectors  = [];
+sad_count       = 0;
 
-% Allocate arrays to hold quiver data
-quiver_arr = [];
+% Candidate offsets for each stage.
+% Rows are (dx, dy) pairs relative to the current search center.
+stage1 = [ 0, 0;                                    % center
+          -1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1;   % S=1 ring
+          -4,-4; -4,0; -4,4; 0,-4; 0,4; 4,-4; 4,0; 4,4];  % S=4 ring
 
+stage2 = [ 0, 0; -1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1];  % S=1 ring
 
-% Calculate total number of SAD computations
-sad_counter = 0;
-
-
-% Iterate through blocks
-% Each block will undergo its own 3 step search.
-% i - horizontal direction // j - vertical direction
+stage3a = [ 0, 0; -2,-2; -2,0; -2,2; 0,-2; 0,2; 2,-2; 2,0; 2,2];  % S=2 ring
+stage3b = [ 0, 0; -1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1];  % S=1 ring
 
 for i = 1:N:width-N+1
     for j = 1:N:height-N+1
 
-        % Set SAD value highest, test for lower SAD.
-        % diffx and diffy are best found motion vectors 
-        sad = inf;
-        diffx = 0;
-        diffy = 0;
+        best_sad = inf;
+        dx = 0;
+        dy = 0;
 
-        % Isolate current frame block
-        curr_fb = current_frame(j:j+N-1,i:i+N-1);
-        
-        % Matrix to record what points have been checked already
-        % This ensures no duplicated computation
-        checked = false(15,15);
+        curr_block = current_frame(j:j+N-1, i:i+N-1);
 
+        % visited(q+8, p+8) tracks which offsets have been evaluated.
+        % The +8 offset maps the search range [-7, +7] to indices [1, 15].
+        visited = false(15, 15);
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        % CHECKING FOR S=1 NEIGHBORING PIXELS & S=4 Coarse NTSS Step 1
-        % Calculate SAD for entire block @ each candidate location
-        % p - horizontal shift, q - vertical shift
-        
-        search_loc1 = [0, 0;-1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1;
-            -4,-4; -4,0; -4,4; 0,-4; 0,4; 4,-4; 4,0; 4,4];
-
-        for k = 1:size(search_loc1,1)
-            p = search_loc1(k,1);
-            q = search_loc1(k,2);
-
-            ref_i = i + p;
-            ref_j = j + q;
-
-            if (ref_i >= 1 && ref_j >= 1 && ref_i+N-1 <= width && ref_j+N-1 <= height)
-                ref_fb = reference_frame(ref_j:ref_j+N-1, ref_i:ref_i+N-1);
-                temp_sad = sum(sum(abs(curr_fb - ref_fb)));
-                sad_counter = sad_counter + 1;
-                checked(q+8,p+8) = true;
-
-                if (temp_sad < sad)
-                    sad = temp_sad;
-                    diffx = p;
-                    diffy = q;
-                end
-            end 
+        % Stage 1: evaluate all 17 candidates
+        for k = 1:size(stage1, 1)
+            p = stage1(k, 1);
+            q = stage1(k, 2);
+            [best_sad, dx, dy, sad_count, visited] = ...
+                evaluate(reference_frame, curr_block, i, j, p, q, N, width, height, ...
+                         best_sad, dx, dy, sad_count, visited);
         end
 
+        % Decision: which search path to take
+        if dx == 0 && dy == 0
+            % Best match is already at center — no further search needed.
 
-
-        % First step stop implementation
-        if (diffx == 0 && diffy == 0)
-            predicted_frame(j:j+N-1,i:i+N-1) = reference_frame(j+diffy:j+diffy+N-1,i+diffx:i+diffx+N-1);
-
-            % END OF FLOWCHART DECISION #1 (17pts checked// NTSS Step 1)
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        
-        % Perform S = 1 search on minimum point if neighbors central point
-        elseif (abs(diffx) + abs(diffy) <= 2)
-            search_loc2 = [0, 0;-1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1];
-            
-            for k = 1:size(search_loc2,1)
-                p = search_loc2(k,1);
-                q = search_loc2(k,2);
-
-                ref_i = i + p;
-                ref_j = j + q;
-
-                if ~checked(q+8,p+8)
-                    if (ref_i >= 1 && ref_j >= 1 && ref_i+N-1 <= width && ref_j+N-1 <= height)
-                        ref_fb = reference_frame(ref_j:ref_j+N-1, ref_i:ref_i+N-1);
-                        temp_sad = sum(sum(abs(curr_fb - ref_fb)));
-                        sad_counter = sad_counter + 1;
-                        checked(q+8,p+8) = true;
-                        if (temp_sad < sad)
-                            sad = temp_sad;
-                            diffx = p;
-                            diffy = q;
-                        end
-
-                    end
+        elseif abs(dx) + abs(dy) <= 2
+            % Best is an S=1 neighbor — do one more S=1 refinement (Stage 2).
+            for k = 1:size(stage2, 1)
+                p = stage2(k, 1);
+                q = stage2(k, 2);
+                if ~visited(q+8, p+8)
+                    [best_sad, dx, dy, sad_count, visited] = ...
+                        evaluate(reference_frame, curr_block, i, j, p, q, N, width, height, ...
+                                 best_sad, dx, dy, sad_count, visited);
                 end
             end
-            predicted_frame(j:j+N-1,i:i+N-1) = reference_frame(j+diffy:j+diffy+N-1,i+diffx:i+diffx+N-1);
-            quiver_arr = [quiver_arr; i j diffx diffy];
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        % Normal TSS operation after preliminary checks
-        % This branch can be more concise. 
         else
-        % S = 2 then S = 1 search from the preliminary lowest SAD value loc
+            % Best is an S=4 point — run full TSS: S=2 then S=1 from that point.
 
-        search_loc3 = [0, 0;-2,-2; -2,0; -2,2; 0,-2; 0,2; 2,-2; 2,0; 2,2];
-        search_loc4 = [0, 0;-1,-1; -1,0; -1,1; 0,-1; 0,1; 1,-1; 1,0; 1,1];
-
-
-            for k = 1:size(search_loc3,1)
-                p = diffx + search_loc3(k,1); 
-                q = diffy + search_loc3(k,2);
-                
-                if (p >= -7 && p <= 7 && q >= -7 && q <= 7)
-                    if ~checked(q+8, p+8)
-                        ref_i = i + p;
-                        ref_j = j + q;
-                        if (ref_i >= 1 && ref_j >= 1 && ref_i+N-1 <= width && ref_j+N-1 <= height)
-                            ref_fb = reference_frame(ref_j:ref_j+N-1, ref_i:ref_i+N-1);
-                            temp_sad = sum(sum(abs(curr_fb - ref_fb)));
-                            sad_counter = sad_counter + 1;
-                            checked(q+8,p+8) = true;
-                            if (temp_sad < sad)
-                                sad = temp_sad;
-                                diffx = p;
-                                diffy = q;
-                            end
-                        end
-                    end
+            % Stage 3a: S=2 search centered on Stage-1 best
+            for k = 1:size(stage3a, 1)
+                p = dx + stage3a(k, 1);
+                q = dy + stage3a(k, 2);
+                if p >= -7 && p <= 7 && q >= -7 && q <= 7 && ~visited(q+8, p+8)
+                    [best_sad, dx, dy, sad_count, visited] = ...
+                        evaluate(reference_frame, curr_block, i, j, p, q, N, width, height, ...
+                                 best_sad, dx, dy, sad_count, visited);
                 end
             end
 
-            for k = 1:size(search_loc4,1)
-                p = diffx + search_loc4(k,1);
-                q = diffy + search_loc4(k,2);
-                
-                if (p >= -7 && p <= 7 && q >= -7 && q <= 7)
-                    if ~checked(q+8, p+8)
-                        ref_i = i + p;
-                        ref_j = j + q;
-                        if (ref_i >= 1 && ref_j >= 1 && ref_i+N-1 <= width && ref_j+N-1 <= height)
-                            ref_fb = reference_frame(ref_j:ref_j+N-1, ref_i:ref_i+N-1);
-                            temp_sad = sum(sum(abs(curr_fb - ref_fb)));
-                            sad_counter = sad_counter + 1;
-                            checked(q+8,p+8) = true;
-                            if (temp_sad < sad)
-                                sad = temp_sad;
-                                diffx = p;
-                                diffy = q;
-                            end
-                        end
-                    end
+            % Stage 3b: S=1 search centered on Stage-3a best
+            for k = 1:size(stage3b, 1)
+                p = dx + stage3b(k, 1);
+                q = dy + stage3b(k, 2);
+                if p >= -7 && p <= 7 && q >= -7 && q <= 7 && ~visited(q+8, p+8)
+                    [best_sad, dx, dy, sad_count, visited] = ...
+                        evaluate(reference_frame, curr_block, i, j, p, q, N, width, height, ...
+                                 best_sad, dx, dy, sad_count, visited);
                 end
             end
-            predicted_frame(j:j+N-1,i:i+N-1) = reference_frame(j+diffy:j+diffy+N-1,i+diffx:i+diffx+N-1);
         end
-        
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+        % Copy the best-matching reference block into the predicted frame
+        predicted_frame(j:j+N-1, i:i+N-1) = ...
+            reference_frame(j+dy:j+dy+N-1, i+dx:i+dx+N-1);
+
+        motion_vectors = [motion_vectors; i j dx dy]; %#ok<AGROW>
     end
-    
-    quiver_arr = [quiver_arr; i j diffx diffy];
-    end
+end
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-X = quiver_arr(:,1);
-Y = quiver_arr(:,2);
-U = quiver_arr(:,3);
-V = quiver_arr(:,4);
-
-disp(sad_counter)
-
-figure(2)
-imshow(uint8(predicted_frame))
-hold on;
-quiver(X,Y,U,V,0)
-
-% Error image
-err = current_frame - predicted_frame;
-figure(3)
-imshow(err, [])
-
-psnr = 10*log10(255*255/mean(mean((current_frame - predicted_frame).^2)))
+psnr_val = 10 * log10(255^2 / mean(mean((current_frame - predicted_frame).^2)));
 
 end
-% End of blockwise iteration
+
+% ---------------------------------------------------------------------------
+% Evaluate one candidate offset (p, q) for block at (i, j).
+% Updates best_sad, dx, dy, sad_count, and visited if the candidate is valid
+% and within frame bounds.
+% ---------------------------------------------------------------------------
+function [best_sad, dx, dy, sad_count, visited] = ...
+    evaluate(ref_frame, curr_block, i, j, p, q, N, W, H, best_sad, dx, dy, sad_count, visited)
+
+ri = i + p;
+rj = j + q;
+
+if ri >= 1 && rj >= 1 && ri+N-1 <= W && rj+N-1 <= H
+    ref_block = ref_frame(rj:rj+N-1, ri:ri+N-1);
+    sad = sum(sum(abs(curr_block - ref_block)));
+    sad_count = sad_count + 1;
+    visited(q+8, p+8) = true;
+    if sad < best_sad
+        best_sad = sad;
+        dx = p;
+        dy = q;
+    end
+end
+
+end
