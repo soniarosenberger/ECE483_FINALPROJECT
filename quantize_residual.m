@@ -13,7 +13,7 @@ QM = [16 11 10 16  24  40  51  61;
       49 64 78 87 103 121 120 101;
       72 92 95 98 112 100 103  99];
 
-scaled_QM = sf * QM / 16;
+scaled_QM = sf * QM;
 
 [H, W]         = size(residual);
 recon_residual = zeros(H, W);

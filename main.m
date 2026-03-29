@@ -20,7 +20,7 @@ if ~exist(input_path, 'file') && ~exist(input_path, 'dir')
 end
 
 N        = 16;  % block size
-sf       = 10;  % quantization scaling factor
+sf       = 1;   % quantization scaling factor (1 = standard JPEG, 0.5 = higher quality, 2+ = more compression)
 gop_size = 5;   % I-frame every 5 frames (IPPPP)
 
 all_frames = io_processing(input_path, 'load');
