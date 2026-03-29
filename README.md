@@ -72,7 +72,9 @@ For each P-frame, the encoder does the following per 16×16 block:
 4. DCT quantization (quantize_residual.m)
    Split residual into 8x8 blocks.
    Apply 2D DCT to each block.
-   Divide coefficients by Q and round → small values become zero.
+   Divide coefficients element-wise by the scaled JPEG luminance
+   quantization matrix (sf * QM / 16) and round → small values become zero.
+   High-frequency coefficients use larger divisors and zero out more easily.
    Count non-zero coefficients (these are what gets transmitted).
    Reconstruct via dequantization + inverse DCT.
 
@@ -84,7 +86,7 @@ For each P-frame, the encoder does the following per 16×16 block:
    The decoded frame becomes the reference for the next P-frame.
 ```
 
-`Q = 10` by default (set in `main.m`). Increasing Q reduces the coefficient count and file size but lowers PSNR.
+`sf = 10` by default (set in `main.m`). The base quantization matrix is the standard JPEG luminance matrix, scaled by `sf / 16`. Increasing `sf` reduces the coefficient count and file size but lowers PSNR.
 
 ---
 
@@ -123,7 +125,14 @@ Worst case is **33 SAD ops vs. EBMA's 225** — roughly 7× fewer computations. 
 
 ## Output and Analysis
 
-When run with `'both'`, three comparison functions are called automatically:
+For every run, the following figures are produced for the first P-frame:
+
+| Figure | What it shows |
+|--------|--------------|
+| Motion vector overlay | Decoded frame with motion vectors drawn as arrows (one per block) |
+| Residual | `original - predicted` before quantization, scaled to full display range. Bright = prediction error; dark/gray = well-predicted regions |
+
+When run with `'both'`, three additional comparison functions are called automatically:
 
 | Function | What it shows |
 |----------|--------------|
@@ -142,7 +151,7 @@ All three parameters are set near the top of `main.m`:
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `N` | 16 | Block size in pixels (16×16 macroblocks) |
-| `Q` | 10 | DCT quantization step — larger reduces coefficients but lowers PSNR |
+| `sf` | 10 | Scaling factor applied to the JPEG luminance quantization matrix (`sf/16 * QM`) — larger reduces coefficients but lowers PSNR |
 | `gop_size` | 5 | Frames per GOP (1 I-frame + 4 P-frames) |
 
 ---

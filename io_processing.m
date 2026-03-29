@@ -1,35 +1,22 @@
-% IO_PROCESSING  Load or save frames for the video encoder.
-%
-% Load mode — returns a cell array of double grayscale frames:
-%   frames = io_processing(input_path, 'load')
-%
-%   input_path can be:
-%     a video file   (.mp4 .avi .mov .mpg .mpeg)
-%     an image file  (.tif .png .jpg .bmp)
-%     a directory    (loads all images inside, sorted by name)
-%
-% Save mode — writes frames to an mp4 or avi file:
-%   io_processing(output_path, 'save', frames)
+% load or save frames
+%   frames = io_processing(path, 'load')
+%   io_processing(path, 'save', frames)
 
 function frames = io_processing(input_path, mode, save_frames)
 
 if strcmp(mode, 'load')
     frames = load_frames(input_path);
-
 elseif strcmp(mode, 'save')
     if nargin < 3
         error('Save mode requires a frames cell array as the third argument.');
     end
     save_video(input_path, save_frames);
     frames = {};
-
 else
     error('Unknown mode "%s". Use ''load'' or ''save''.', mode);
 end
 
 end
-
-% ---------------------------------------------------------------------------
 
 function frames = load_frames(input_path)
 
@@ -40,7 +27,6 @@ end
 frames = {};
 
 if exist(input_path, 'dir')
-    % Load all images from the directory in sorted order
     exts  = {'*.tif','*.tiff','*.png','*.jpg','*.jpeg','*.bmp'};
     files = [];
     for e = 1:numel(exts)
@@ -60,7 +46,6 @@ else
     video_exts  = {'.avi', '.mp4', '.mov', '.m4v', '.mkv', '.mpg', '.mpeg'};
 
     if any(strcmp(lower(ext), video_exts))
-        % Read all frames from the video file
         vr = VideoReader(input_path);
         while hasFrame(vr)
             frames{end+1} = to_gray_double(readFrame(vr)); %#ok<AGROW>
@@ -69,14 +54,11 @@ else
             error('No frames read from: %s', input_path);
         end
     else
-        % Single image
         frames{1} = to_gray_double(imread(input_path));
     end
 end
 
 end
-
-% ---------------------------------------------------------------------------
 
 function img = to_gray_double(img)
 if size(img, 3) == 3
@@ -84,8 +66,6 @@ if size(img, 3) == 3
 end
 img = double(img);
 end
-
-% ---------------------------------------------------------------------------
 
 function save_video(output_path, frames)
 
